@@ -1,0 +1,16 @@
+appId: com.caseboard.app
+productName: 案件线索管理看板
+directories:
+  output: release
+win:
+  target:
+    - nsis
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: 案件线索管理看板
+files:
+  - dist/**/*
+  - dist-electron/**/*

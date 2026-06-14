@@ -17,6 +17,61 @@ import {
 
 let mainWindow: BrowserWindow | null = null
 
+// ─── Date normalization for Excel import ───
+// Handles: Excel serial numbers, "2026/6/6", "2026-6-6", "2026/6/6 14:30", etc.
+function formatDateStr(d: Date): string {
+  const y = d.getFullYear(),
+        m = String(d.getMonth() + 1).padStart(2, '0'),
+        day = String(d.getDate()).padStart(2, '0'),
+        h = String(d.getHours()).padStart(2, '0'),
+        min = String(d.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${day} ${h}:${min}`
+}
+
+function normalizeEventTime(value: any): string {
+  if (value === null || value === undefined) return ''
+
+  // Excel serial date (number)
+  if (typeof value === 'number') {
+    const utcDays = Math.floor(value) - 25569
+    const date = new Date(utcDays * 86400000)
+    const fraction = value - Math.floor(value)
+    if (fraction > 0) date.setSeconds(Math.round(fraction * 86400))
+    if (isNaN(date.getTime())) return ''
+    return formatDateStr(date)
+  }
+
+  const str = String(value).trim()
+  if (!str) return ''
+
+  // Try parsing with explicit components (handles YYYY/M/D, YYYY-M-D, YYYY年M月D日, etc.)
+  const cleaned = str.replace(/[年月]/g, '-').replace(/[日号]/g, '').replace(/\//g, '-')
+  const parts = cleaned.split(/[\s\-T]+/)
+  if (parts.length >= 3) {
+    const [ys, ms, ds, ...timeParts] = parts
+    const year = parseInt(ys, 10), month = parseInt(ms, 10) - 1, day = parseInt(ds, 10)
+    let hours = 0, minutes = 0
+    if (timeParts.length >= 2) {
+      hours = parseInt(timeParts[0], 10) || 0
+      minutes = parseInt(timeParts[1], 10) || 0
+    }
+    if (!isNaN(year) && !isNaN(month) && !isNaN(day) && year > 1900 && year < 2100) {
+      const date = new Date(year, month, day, hours, minutes)
+      if (!isNaN(date.getTime())) {
+        return formatDateStr(date)
+      }
+    }
+  }
+
+  // Fallback: native Date parsing
+  const fallback = new Date(str)
+  if (!isNaN(fallback.getTime())) {
+    return formatDateStr(fallback)
+  }
+
+  return str
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -304,7 +359,7 @@ ipcMain.handle('import:execute', async (_e, filePath: string, strategy: 'skip' |
             .filter((p: string) => p.length > 0)
           return {
             event_type: (e['事件类型'] || e['event_type'] || '') === '执法动作' ? 'action_track' : 'case_track',
-            event_time: e['事件时间'] || e['event_time'] || '',
+            event_time: normalizeEventTime(e['事件时间'] || e['event_time']),
             description: e['事件描述'] || e['description'] || '',
             summary: e['事件概括'] || e['summary'] || '',
             image_paths: JSON.stringify(imagePathList),

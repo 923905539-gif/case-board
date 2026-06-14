@@ -13,6 +13,7 @@ npm run dev          # 开发模式（Vite HMR，渲染进程热更新）
 npm run start        # 直接用 Electron 加载已构建的 dist/ 目录
 npm run build        # 完整构建：vue-tsc → vite build → electron-builder
 npm run build:win    # 构建 Windows .exe NSIS 安装包
+npm run preview      # Vite 预览（仅前端，不含 Electron）
 ```
 
 ## 技术栈
@@ -31,6 +32,8 @@ window.electronAPI.*  →  ipcMain.handle('*')   →  database.ts  →  SQLite (
 - **preload.ts**: 通过 `contextBridge.exposeInMainWorld` 暴露 `electronAPI`，渲染进程只能调用此 API，不能直接访问 Node.js
 - **database.ts**: 数据库文件在 `app.getPath('userData')/case-board.db`。**sql.js 初始化是异步的**（需加载 WASM），`getDatabase()` 返回 `Promise<Database>`，所有调用方必须 `await`。每次写操作后 `saveDb()` 全量导出 Buffer 写盘
 - **main.ts**: 创建 BrowserWindow + 注册全部 IPC handler（CRUD、导入、导出、模板生成）。Excel 列名同时兼容中文和英文（如 `row['线索编号'] || row['clue_number']`）
+- **env.d.ts**: `Window.electronAPI` 的类型定义，是渲染进程↔主进程的类型契约。新增 IPC 接口时需同时更新 `preload.ts`（实现）和 `env.d.ts`（类型声明）
+- **vite.config.ts**: `@` 路径别名映射到 `src/`，构建时有主进程(`electron/main.ts`)和预加载(`electron/preload.ts`)两个入口
 
 ## Pinia Store — 唯一状态中心
 
@@ -41,9 +44,77 @@ window.electronAPI.*  →  ipcMain.handle('*')   →  database.ts  →  SQLite (
 - **未选中线索时**: TaskBoard 显示全部任务（彩色标签按 `getClueColor()` 区分），TimelineView 显示全部事件
 - `getClueColor(clueId)` — 10 色调色板，同一条线索在任务卡片、时间轴、鱼骨图中颜色一致
 
-## 三张数据库表
+## 四张数据库表
 
-`clues`（12 个字段，`clue_number` UNIQUE） → `timeline_events`（`event_type` 为 `case_track`|`action_track`） → `tasks`（`status` 为 `todo`|`in_progress`|`done`，`urgency` 为 `low`|`normal`|`high`|`urgent`）。均通过 `clue_id` 外键 + `ON DELETE CASCADE` 关联。
+`clues`（12 个字段，`clue_number` UNIQUE） → `timeline_events`（`event_type` 为 `case_track`|`action_track`） → `tasks`（`status` 为 `todo`|`in_progress`|`done`，`urgency` 为 `low`|`normal`|`high`|`urgent`） → `clue_parties`（当事人信息，独立存储）。均通过 `clue_id` 外键 + `ON DELETE CASCADE` 关联。
+
+`database.ts` 内置向前兼容迁移（`try { ALTER TABLE } catch {}`），旧版本数据库升级时自动添加 `summary`、`image_paths` 列和 `clue_parties` 表。
+
+## 组件架构
+
+```
+App.vue
+├── ClueList        — 左上：线索列表（搜索、月份筛选、线索 CRUD）
+├── DetailPanel     — 右上：详情面板（三个 Tab）
+│   ├── TaskBoard   — 案件管理（看板三列：待办/办理中/已办）
+│   ├── CaseInfo    — 基本信息（线索字段编辑 + 当事人管理）
+│   └── CaseBrief   — 案情简报（富文本展示）
+└── TimelineView    — 下半部：时间轴可视化（时间轴/鱼骨图切换）
+```
+
+- **ClueList**: 按月份筛选、搜索过滤、选中线索高亮。线索颜色通过 `getClueColor()` 分配，贯穿任务卡片、时间轴、鱼骨图
+- **DetailPanel**: 三个 Element Plus Tab，通过 `v-model` 懒渲染。选中线索变更时 Tab 内数据自动联动
+- **TaskBoard**: 三列看板布局，支持拖拽改变状态、内联编辑。未选中线索时显示全部任务，用彩色标签区分归属
+- **TimelineView**: 包含时间轴和鱼骨图两种视图。添加/编辑/删除事件对话框。事件详情弹窗支持 上一条/下一条 导航和图片预览
+
+## CSS 架构
+
+三种样式机制分层使用，互不冲突：
+1. **Tailwind CSS** (`@apply` 在 `<style>` 中) — 快速布局和间距
+2. **Scoped CSS 自定义属性** — 主题色、间距、圆角、阴影等全局 Token（定义在 `src/main.ts` 或 App.vue 的 `:root` 中）
+3. **`:deep()` 穿透** — 覆盖 Element Plus 组件内部样式（如 header 中的按钮颜色适配深色背景）
+
+## TimelineView 闭包存储模式
+
+ECharts 自定义 series 的 `renderItem` 无法可靠传递自定义属性（下划线前缀属性如 `_eventData` 会被剥离）。**正确做法**：通过 `value` 数组编码索引 + 模块级闭包数组访问原始数据。
+
+```typescript
+// 模块级闭包存储（renderItem 和点击事件共享）
+const renderStores: Record<string, { events: any[]; clusters: any[] }> = {
+  case: { events: [], clusters: [] },
+  action: { events: [], clusters: [] },
+}
+
+// 构建数据时：索引编码到 value[2]
+data: caseRenderData.map((d, i) => ({ value: [d[0], d[1], i] }))
+// 赋值闭包：每次 renderTimeline() 刷新
+renderStores.case.events = caseStagger.eventData
+
+// renderItem 中：通过闭包访问，不依赖 params 自定义属性
+const idx = api.value(2)           // 从 value[2] 取索引
+const evt = renderStores.case.events[idx]
+
+// 点击事件中：resolve seriesIndex 到 kind，统一访问
+const kind = params.seriesIndex === 3 ? 'case' : params.seriesIndex === 4 ? 'action' : null
+const stores = renderStores[kind]
+```
+
+点击事件中 `params.data._eventData` 仍可用，但推荐统一使用闭包模式保持一致性。
+
+## 聚类卡片系统
+
+当 `assignStagger` 的层级溢出（卡片太多、间距太小导致超过可用层级上限），溢出事件进入 `overflow` 列表。`buildClusters()` 按像素间距自动聚合成"聚合卡片"（虚线边框、显示 "+N" 和日期范围）。聚合卡片通过负数索引（`-(i+1)`）与普通卡片区分，点击后自动 `dataZoom` 放大到聚合范围。
+
+关键流程：`assignStagger` → overflow → `buildClusters` → 作为额外数据项加入 Series 3/4 → `buildClusterCard()` 渲染 → 点击 `dispatchAction('dataZoom', ...)`。
+
+## Excel 导入日期解析
+
+`electron/main.ts` 中的 `normalizeEventTime()` 和 `formatDateStr()` 处理三种日期格式：
+- **Excel 序列数**（数字）：`Math.floor(value) - 25569` 转日期，`fraction * 86400` 转秒
+- **中文/多种分隔符**：`年/月/日`、`-`、`/`、`T` 分隔统一解析
+- **回调**：原生 `new Date(str)` 兜底
+
+统一输出格式 `YYYY-MM-DD HH:mm`。仅在 `import:execute` IPC handler 中调用。
 
 ## ECharts 三种视图（TimelineView.vue）
 

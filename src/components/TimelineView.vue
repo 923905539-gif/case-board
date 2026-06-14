@@ -259,6 +259,17 @@ const chartContainer = ref<HTMLDivElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
 let zoomLevel = ref(1)
 
+// Closure stores for renderItem + click handler (ECharts strips underscore-prefixed props)
+const renderStores: Record<string, { events: any[]; clusters: any[] }> = {
+  case: { events: [], clusters: [] },
+  action: { events: [], clusters: [] },
+}
+
+// Track current dataZoom for responsive clustering (preserved across re-renders)
+let currentZoomStart = 0
+let currentZoomEnd = 100
+let zoomRenderTimer: ReturnType<typeof setTimeout> | null = null
+
 const isFullscreen = ref(false)
 
 const views = [
@@ -287,7 +298,6 @@ const CARD_PAD_X = 10
 const CARD_LINE_HEIGHT = 17
 const MAX_LINE_CHARS = 9
 const CARD_FONT_SIZE = 13
-const STAGGER_LEVELS = 3
 const STAGGER_STEP = 0.30
 const ANCHOR_R = 4.5
 
@@ -479,8 +489,28 @@ function initChart() {
   renderChart()
 
   chartInstance.on('click', (params: any) => {
-    if (params.data && params.data._eventData) {
-      openDetail(params.data._eventData)
+    if (params.data && Array.isArray(params.data.value)) {
+      const idx = params.data.value[2]
+      const kind = params.seriesIndex === 3 ? 'case' : params.seriesIndex === 4 ? 'action' : null
+      if (!kind) return
+      const stores = renderStores[kind]
+      if (idx < 0) {
+        // Cluster card click -> zoom to cluster range
+        const cluster = stores.clusters[-idx - 1]
+        if (cluster) {
+          const pad = Math.max((cluster.maxTime - cluster.minTime) * 0.3, 3600000)
+          chartInstance?.dispatchAction({
+            type: 'dataZoom',
+            startValue: cluster.minTime - pad,
+            endValue: cluster.maxTime + pad,
+          })
+        }
+        return
+      }
+      if (idx >= 0) {
+        const evt = stores.events[idx]
+        if (evt) openDetail(evt)
+      }
     }
   })
 }
@@ -533,6 +563,63 @@ function getCardWidth(text: string): number {
 }
 
 // ============ Timeline View ============
+
+// Shared card builders for custom series renderItem (case + action share identical layout)
+function buildClusterCard(minT: number, maxT: number, count: number, yVal: number, color: string, api: any) {
+  const [x1, cy] = api.coord([minT, yVal])
+  const [x2] = api.coord([maxT, yVal])
+  const cw = Math.max(x2 - x1, 100)
+  const cx = (x1 + x2) / 2
+  const countLabel = `+${count}`
+  const d1 = new Date(minT), d2 = new Date(maxT)
+  const timeLabel = `${d1.getMonth() + 1}/${d1.getDate()} ~ ${d2.getMonth() + 1}/${d2.getDate()}`
+  return {
+    type: 'group' as const,
+    children: [
+      { type: 'rect' as const, shape: { x: cx - cw / 2, y: cy - CARD_H / 2, width: cw, height: CARD_H, r: CARD_R }, style: { fill: 'rgba(255,255,255,0.85)', stroke: color, lineWidth: 1.5, lineDash: [5, 3], shadowBlur: 8, shadowColor: 'rgba(0,0,0,0.10)' } },
+      { type: 'rect' as const, shape: { x: cx - cw / 2, y: cy - CARD_H / 2, width: CARD_ACCENT_W, height: CARD_H, r: [CARD_R, 0, 0, CARD_R] }, style: { fill: color } },
+      { type: 'text' as const, style: { text: countLabel, fill: color, font: `bold ${CARD_FONT_SIZE + 2}px "Inter", "Microsoft YaHei", sans-serif`, x: cx + CARD_ACCENT_W / 2, y: cy - 6, textAlign: 'center', textBaseline: 'bottom' } },
+      { type: 'text' as const, style: { text: timeLabel, fill: TEXT_SECONDARY, font: `${9}px "Inter", "Microsoft YaHei", sans-serif`, x: cx + CARD_ACCENT_W / 2, y: cy + 6, textAlign: 'center', textBaseline: 'top' } },
+    ],
+  }
+}
+
+function buildNormalCard(t: number, yVal: number, summary: string, color: string, api: any) {
+  const [cx, cy] = api.coord([t, yVal])
+  const lines = wrapSummary(summary)
+  const cw = getCardWidth(summary)
+  const cardTop = cy - CARD_H / 2
+  const textBlockH = lines.length * CARD_LINE_HEIGHT
+  const textBlockTop = cardTop + (CARD_H - textBlockH) / 2
+  const textChildren = lines.map((line, li) => ({
+    type: 'text' as const,
+    style: {
+      text: line,
+      fill: TEXT_COLOR,
+      font: `bold ${CARD_FONT_SIZE}px "Inter", "Microsoft YaHei", sans-serif`,
+      x: cx + CARD_ACCENT_W / 2,
+      y: textBlockTop + li * CARD_LINE_HEIGHT + (CARD_LINE_HEIGHT - CARD_FONT_SIZE) / 2,
+      textAlign: 'center' as const,
+      textBaseline: 'top' as const,
+    },
+  }))
+  return {
+    type: 'group' as const,
+    children: [
+      { type: 'rect' as const, shape: { x: cx - cw / 2, y: cy - CARD_H / 2, width: cw, height: CARD_H, r: CARD_R }, style: { fill: '#FFFFFF', stroke: color, lineWidth: 1.5, shadowBlur: 6, shadowColor: 'rgba(0,0,0,0.08)' } },
+      { type: 'rect' as const, shape: { x: cx - cw / 2, y: cy - CARD_H / 2, width: CARD_ACCENT_W, height: CARD_H, r: [CARD_R, 0, 0, CARD_R] }, style: { fill: color } },
+      ...textChildren,
+    ],
+  }
+}
+
+function xAxisLabelFormatter(value: number): string {
+  const d = new Date(value)
+  if (zoomLevel.value > 2) return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  if (zoomLevel.value > 1.2) return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:00`
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
 function renderTimeline() {
   if (!chartInstance) return
   if (!store.selectedClueId) {
@@ -561,39 +648,107 @@ function renderTimeline() {
     const gridRight = 40
     const plotW = chartW - gridLeft - gridRight
     const paddedRange = paddedMax - paddedMin
+    const chartH = chartInstance.getHeight() || (chartContainer.value?.clientHeight || 500)
+
+    // Compute visible range from current dataZoom state (for responsive clustering)
+    const visibleMin = paddedMin + paddedRange * (currentZoomStart / 100)
+    const visibleMax = paddedMin + paddedRange * (currentZoomEnd / 100)
+    const visibleRange = visibleMax - visibleMin || paddedRange
 
     function timeToEstPx(t: number): number {
-      return gridLeft + ((t - paddedMin) / paddedRange) * plotW
+      return gridLeft + ((t - visibleMin) / visibleRange) * plotW
     }
 
-    function assignStagger(list: any[], baseY: number, step: number): { data: number[][]; eventData: any[] } {
+    function assignStagger(list: any[], baseY: number, step: number, chartHeight: number): { data: number[][]; eventData: any[]; overflow: { t: number; event: any; px: number }[] } {
       const data: number[][] = []
       const eventData: any[] = []
-      let lastPx = -Infinity
-      let level = 0
-      const CARD_MIN_GAP = CARD_MIN_W + 8
+      const overflow: { t: number; event: any; px: number }[] = []
+
+      const Y_AXIS_RANGE = 2.6
+      const VERT_PAD = 4
+      const H_GAP = 8
+
+      const pxPerYUnit = chartHeight / Y_AXIS_RANGE
+      const minAbsStep = (CARD_H + VERT_PAD) / pxPerYUnit
+      const absStep = Math.abs(step)
+      const effectiveAbsStep = Math.max(absStep, minAbsStep)
+      const sgn = Math.sign(step)
+      const effectiveStep = sgn * effectiveAbsStep
+
+      const cardHalfHInY = (CARD_H / 2) / pxPerYUnit
+      const TOP_Y = 1.30
+      const BOT_Y = -1.30
+      let maxLevels: number
+      if (sgn > 0) {
+        maxLevels = Math.max(0, Math.floor((TOP_Y - cardHalfHInY - baseY) / effectiveAbsStep))
+      } else {
+        maxLevels = Math.max(0, Math.floor((baseY - (BOT_Y + cardHalfHInY)) / effectiveAbsStep))
+      }
+
+      const levelRightEdge: number[] = []
 
       for (const e of list) {
         const t = new Date(e.event_time).getTime()
         const px = timeToEstPx(t)
-        if (px - lastPx < CARD_MIN_GAP) {
-          level = (level + 1) % STAGGER_LEVELS
-        } else {
-          level = 0
+        const summary = e.summary || getTruncatedDesc(e.description || '')
+        const cw = getCardWidth(summary)
+        const leftEdge = px - cw / 2
+        const rightEdge = px + cw / 2
+
+        let level = 0
+        while (level <= maxLevels) {
+          if (level >= levelRightEdge.length) {
+            levelRightEdge[level] = rightEdge
+            break
+          }
+          if (leftEdge >= levelRightEdge[level] + H_GAP) {
+            levelRightEdge[level] = rightEdge
+            break
+          }
+          level++
         }
-        const y = baseY + level * step
-        data.push([t, y])
-        eventData.push(e)
-        lastPx = px
+
+        if (level > maxLevels) {
+          overflow.push({ t, event: e, px })
+        } else {
+          const y = baseY + level * effectiveStep
+          data.push([t, y])
+          eventData.push(e)
+        }
       }
-      return { data, eventData }
+      return { data, eventData, overflow }
     }
 
-    const caseStagger = assignStagger(caseEvents, 0.38, STAGGER_STEP)
-    const actionStagger = assignStagger(actionEvents, -0.38, -STAGGER_STEP)
+    function buildClusters(overflow: { t: number; event: any; px: number }[]): { minTime: number; maxTime: number; events: any[]; count: number }[] {
+      if (overflow.length === 0) return []
+      const clusters: { minTime: number; maxTime: number; events: any[]; count: number }[] = []
+      const CLUSTER_GAP_PX = CARD_MIN_W * 3
+      let current = { minTime: overflow[0].t, maxTime: overflow[0].t, events: [overflow[0].event] }
+      for (let i = 1; i < overflow.length; i++) {
+        if (overflow[i].px - overflow[i - 1].px < CLUSTER_GAP_PX) {
+          current.maxTime = overflow[i].t
+          current.events.push(overflow[i].event)
+        } else {
+          clusters.push({ ...current, count: current.events.length })
+          current = { minTime: overflow[i].t, maxTime: overflow[i].t, events: [overflow[i].event] }
+        }
+      }
+      clusters.push({ ...current, count: current.events.length })
+      return clusters
+    }
+
+    const caseStagger = assignStagger(caseEvents, 0.38, STAGGER_STEP, chartH)
+    const actionStagger = assignStagger(actionEvents, -0.38, -STAGGER_STEP, chartH)
+    const caseClusters = buildClusters(caseStagger.overflow)
+    const actionClusters = buildClusters(actionStagger.overflow)
 
     const caseRenderData = caseStagger.data
     const actionRenderData = actionStagger.data
+
+    renderStores.case.events = caseStagger.eventData
+    renderStores.action.events = actionStagger.eventData
+    renderStores.case.clusters = caseClusters
+    renderStores.action.clusters = actionClusters
 
     const option: echarts.EChartsOption = {
       backgroundColor: BG_COLOR,
@@ -604,8 +759,25 @@ function renderTimeline() {
         textStyle: { color: '#F1F5F9', fontSize: 12 },
         formatter: (params: any) => {
           const d = params.data
-          if (!d._eventData) return ''
-          const e = d._eventData
+          if (!d || !Array.isArray(d.value)) return ''
+          const idx = d.value[2]
+          const stores = renderStores[params.seriesIndex === 3 ? 'case' : 'action']
+          // Cluster card
+          if (idx < 0) {
+            const c = stores.clusters[-idx - 1]
+            if (!c) return ''
+            const names = c.events.slice(0, 5).map((e: any) => e.summary || getTruncatedDesc(e.description || '')).join('<br/>')
+            const more = c.count > 5 ? `<br/><span style="color:#94A3B8;">...还有 ${c.count - 5} 条</span>` : ''
+            return `<strong>📦 ${c.count} 条聚合事件</strong><br/>
+              <span style="color:#94A3B8;font-size:11px;">${new Date(c.minTime).toLocaleString()} ~ ${new Date(c.maxTime).toLocaleString()}</span><br/>
+              <span style="color:#64748B;font-size:10px;">────────</span><br/>
+              ${names}${more}<br/>
+              <span style="color:#64748B;font-size:10px;">────────</span><br/>
+              <span style="color:#3B82F6;font-size:10px;">💡 点击可放大查看</span>`
+          }
+          // Normal card
+          const e = stores.events[idx]
+          if (!e) return ''
           const summary = e.summary || getTruncatedDesc(e.description || '')
           return `<strong>${summary}</strong><br/>
             ${e.event_time}<br/>
@@ -624,12 +796,7 @@ function renderTimeline() {
           show: true,
           color: TEXT_SECONDARY,
           fontSize: 10,
-          formatter: (value: number) => {
-            const d = new Date(value)
-            if (zoomLevel.value > 2) return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-            if (zoomLevel.value > 1.2) return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:00`
-            return `${d.getMonth() + 1}/${d.getDate()}`
-          },
+          formatter: xAxisLabelFormatter,
         },
         splitLine: { show: true, lineStyle: { color: '#E2E8F0', type: 'dashed' } },
       },
@@ -705,91 +872,55 @@ function renderTimeline() {
             }
           },
         },
-        // Series 3: Case event cards (z:10)
+        // Series 3: Case event cards + cluster cards (z:10)
         {
           type: 'custom',
-          data: caseRenderData.map((d, i) => ({ value: [d[0], d[1], i], _eventData: caseStagger.eventData[i] })),
+          data: [
+            ...caseRenderData.map((d, i) => ({ value: [d[0], d[1], i] })),
+            ...caseClusters.map((c, i) => ({ value: [c.minTime, 0.38, -(i + 1)] })),
+          ],
           z: 10,
           renderItem: (params: any, api: any) => {
             const t = api.value(0) as number
             const yVal = api.value(1) as number
             const idx = api.value(2) as number
-            const [cx, cy] = api.coord([t, yVal])
-            const color = CASE_COLOR
-            const evt = caseStagger.eventData[idx]
-            const summary = evt?.summary || getTruncatedDesc(evt?.description || '')
-            const lines = wrapSummary(summary)
-            const cw = getCardWidth(summary)
-            const halfW = cw / 2
-            const halfH = CARD_H / 2
-            const cardTop = cy - halfH
-            const textBlockH = lines.length * CARD_LINE_HEIGHT
-            const textBlockTop = cardTop + (CARD_H - textBlockH) / 2
-            const textChildren = lines.map((line, li) => ({
-              type: 'text' as const,
-              style: {
-                text: line,
-                fill: TEXT_COLOR,
-                font: `bold ${CARD_FONT_SIZE}px "Inter", "Microsoft YaHei", sans-serif`,
-                x: cx + CARD_ACCENT_W / 2,
-                y: textBlockTop + li * CARD_LINE_HEIGHT + (CARD_LINE_HEIGHT - CARD_FONT_SIZE) / 2,
-                textAlign: 'center' as const,
-                textBaseline: 'top' as const,
-              },
-            }))
-            return {
-              type: 'group',
-              children: [
-                { type: 'rect', shape: { x: cx - halfW, y: cy - halfH, width: cw, height: CARD_H, r: CARD_R }, style: { fill: '#FFFFFF', stroke: color, lineWidth: 1.5, shadowBlur: 6, shadowColor: 'rgba(0,0,0,0.08)' } },
-                { type: 'rect', shape: { x: cx - halfW, y: cy - halfH, width: CARD_ACCENT_W, height: CARD_H, r: [CARD_R, 0, 0, CARD_R] }, style: { fill: color } },
-                ...textChildren,
-              ],
+
+            if (idx < 0) {
+              const cluster = renderStores.case.clusters[-idx - 1]
+              if (!cluster) return undefined
+              return buildClusterCard(cluster.minTime, cluster.maxTime, cluster.count, yVal, CASE_COLOR, api)
             }
+
+            const evt = renderStores.case.events[idx]
+            const summary = evt?.summary || getTruncatedDesc(evt?.description || '')
+            return buildNormalCard(t, yVal, summary, CASE_COLOR, api)
           },
           emphasis: {
             itemStyle: { shadowBlur: 12, shadowColor: 'rgba(217,119,6,0.4)' },
           },
         },
-        // Series 4: Action event cards (z:10)
+        // Series 4: Action event cards + cluster cards (z:10)
         {
           type: 'custom',
-          data: actionRenderData.map((d, i) => ({ value: [d[0], d[1], i], _eventData: actionStagger.eventData[i] })),
+          data: [
+            ...actionRenderData.map((d, i) => ({ value: [d[0], d[1], i] })),
+            ...actionClusters.map((c, i) => ({ value: [c.minTime, -0.38, -(i + 1)] })),
+          ],
           z: 10,
           renderItem: (params: any, api: any) => {
             const t = api.value(0) as number
             const yVal = api.value(1) as number
             const idx = api.value(2) as number
-            const [cx, cy] = api.coord([t, yVal])
-            const color = ACTION_COLOR
-            const evt = actionStagger.eventData[idx]
-            const summary = evt?.summary || getTruncatedDesc(evt?.description || '')
-            const lines = wrapSummary(summary)
-            const cw = getCardWidth(summary)
-            const halfW = cw / 2
-            const halfH = CARD_H / 2
-            const cardTop = cy - halfH
-            const textBlockH = lines.length * CARD_LINE_HEIGHT
-            const textBlockTop = cardTop + (CARD_H - textBlockH) / 2
-            const textChildren = lines.map((line, li) => ({
-              type: 'text' as const,
-              style: {
-                text: line,
-                fill: TEXT_COLOR,
-                font: `bold ${CARD_FONT_SIZE}px "Inter", "Microsoft YaHei", sans-serif`,
-                x: cx + CARD_ACCENT_W / 2,
-                y: textBlockTop + li * CARD_LINE_HEIGHT + (CARD_LINE_HEIGHT - CARD_FONT_SIZE) / 2,
-                textAlign: 'center' as const,
-                textBaseline: 'top' as const,
-              },
-            }))
-            return {
-              type: 'group',
-              children: [
-                { type: 'rect', shape: { x: cx - halfW, y: cy - halfH, width: cw, height: CARD_H, r: CARD_R }, style: { fill: '#FFFFFF', stroke: color, lineWidth: 1.5, shadowBlur: 6, shadowColor: 'rgba(0,0,0,0.08)' } },
-                { type: 'rect', shape: { x: cx - halfW, y: cy - halfH, width: CARD_ACCENT_W, height: CARD_H, r: [CARD_R, 0, 0, CARD_R] }, style: { fill: color } },
-                ...textChildren,
-              ],
+
+            if (idx < 0) {
+              const cluster = renderStores.action.clusters[-idx - 1]
+              if (!cluster) return undefined
+              return buildClusterCard(cluster.minTime, cluster.maxTime, cluster.count, yVal, ACTION_COLOR, api)
             }
+
+            const evt = renderStores.action.events[idx]
+            const summary = evt?.summary || getTruncatedDesc(evt?.description || '')
+            return buildNormalCard(t, yVal, summary, ACTION_COLOR, api)
           },
           emphasis: {
             itemStyle: { shadowBlur: 12, shadowColor: 'rgba(3,105,161,0.4)' },
@@ -798,14 +929,14 @@ function renderTimeline() {
       ],
       dataZoom: [
         {
-          type: 'slider', start: 0, end: 100, height: 24, bottom: 8,
+          type: 'slider', start: currentZoomStart, end: currentZoomEnd, height: 24, bottom: 8,
           textStyle: { color: TEXT_SECONDARY, fontSize: 10 },
           borderColor: '#CBD5E1',
           backgroundColor: '#F8FAFC',
           fillerColor: 'rgba(3,105,161,0.12)',
           handleStyle: { color: CASE_COLOR },
         },
-        { type: 'inside', start: 0, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true },
+        { type: 'inside', start: currentZoomStart, end: currentZoomEnd, zoomOnMouseWheel: true, moveOnMouseMove: true },
       ],
       animation: true,
       animationDuration: 550,
@@ -818,20 +949,28 @@ function renderTimeline() {
     chartInstance.on('datazoom', (params: any) => {
       if (params.batch && params.batch.length > 0) {
         const b = params.batch[0]
-        const range = (b.end || 100) - (b.start || 0)
+        const newStart = b.start ?? 0
+        const newEnd = b.end ?? 100
+        const range = newEnd - newStart
+        // Always update zoomLevel immediately for xAxis label formatting
         zoomLevel.value = Math.max(0.5, Math.min(8, 100 / Math.max(range, 1)))
         chartInstance?.setOption({
           xAxis: {
             axisLabel: {
-              formatter: (value: number) => {
-                const d = new Date(value)
-                if (zoomLevel.value > 2) return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-                if (zoomLevel.value > 1.2) return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:00`
-                return `${d.getMonth() + 1}/${d.getDate()}`
-              },
+              formatter: xAxisLabelFormatter,
             },
           },
         })
+        // Debounced full re-render: re-run assignStagger with new visible range
+        if (Math.abs(newStart - currentZoomStart) > 0.05 || Math.abs(newEnd - currentZoomEnd) > 0.05) {
+          currentZoomStart = newStart
+          currentZoomEnd = newEnd
+          if (zoomRenderTimer) clearTimeout(zoomRenderTimer)
+          zoomRenderTimer = setTimeout(() => {
+            renderChart()
+            zoomRenderTimer = null
+          }, 180)
+        }
       }
     })
   } catch (err) {

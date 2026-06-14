@@ -41,8 +41,6 @@ const api = {
   copyImagesForEvent: (eventId: number, sourcePaths: string[]) => ipcRenderer.invoke('images:copyForEvent', eventId, sourcePaths),
   getEventImages: (eventId: number) => ipcRenderer.invoke('images:getEventImages', eventId),
 
-  // Demo
-  generateDemoData: () => ipcRenderer.invoke('demo:generate'),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

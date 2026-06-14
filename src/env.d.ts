@@ -68,7 +68,5 @@ interface Window {
     selectImages: () => Promise<string[]>
     copyImagesForEvent: (eventId: number, sourcePaths: string[]) => Promise<string[]>
     getEventImages: (eventId: number) => Promise<string[]>
-
-    generateDemoData: () => Promise<{ success: boolean; message: string }>
   }
 }

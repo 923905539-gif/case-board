@@ -6,7 +6,7 @@
         <div class="logo-mark">
           <el-icon :size="18"><DataBoard /></el-icon>
         </div>
-        <h1 class="app-title">案件线索管理看板</h1>
+        <h1 class="app-title">贵阳市烟草专卖局 案件管理作战图</h1>
       </div>
       <div class="header-right">
         <el-button @click="handleImport" type="primary" size="default" :icon="Upload">
@@ -17,9 +17,6 @@
         </el-button>
         <el-button @click="handleDownloadTemplate" size="default" :icon="Document">
           下载模板
-        </el-button>
-        <el-button @click="handleGenerateDemo" size="default" :icon="MagicStick" plain>
-          生成演示数据
         </el-button>
       </div>
     </header>
@@ -51,7 +48,7 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { Upload, Download, Document, MagicStick, DataBoard } from '@element-plus/icons-vue'
+import { Upload, Download, Document, DataBoard } from '@element-plus/icons-vue'
 import { useClueStore } from './stores/clueStore'
 import { ElMessage } from 'element-plus'
 import ClueList from './components/ClueList.vue'
@@ -91,15 +88,6 @@ async function handleDownloadTemplate() {
   }
 }
 
-async function handleGenerateDemo() {
-  const result = await window.electronAPI.generateDemoData()
-  if (result.success) {
-    ElMessage.success(result.message)
-    await store.loadAll()
-  } else {
-    ElMessage.warning(result.message)
-  }
-}
 </script>
 
 <style scoped>

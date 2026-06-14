@@ -12,7 +12,7 @@ import {
   insertTask, updateTask, deleteTask,
   getPartiesByClueId, insertParty, updateParty, deleteParty,
   replacePartiesForClueId,
-  importClueWithEvents, exportAllData, clearAllData
+  importClueWithEvents, exportAllData
 } from './database'
 
 let mainWindow: BrowserWindow | null = null
@@ -527,110 +527,6 @@ ipcMain.handle('export:excel', async () => {
     return { success: true, message: '导出成功' }
   } catch (error: any) {
     return { success: false, message: `导出失败：${error.message}` }
-  }
-})
-
-// -- Demo Data Generator --
-ipcMain.handle('demo:generate', async () => {
-  try {
-    // Clear existing data first
-    await clearAllData()
-    // Create 3 demo clues
-    const clue1 = await insertClue({
-      clue_number: 'XS-2025-001',
-      clue_name: '鸿运物流园走私案',
-      lead_unit: '稽查一科',
-      assist_unit: '公安经侦支队',
-      discovery_date: '2025-01-15',
-      party_name: '张伟强',
-      party_id_number: '440000199001011234',
-      party_phone: '13800001111',
-      party_hometown: '广东广州',
-      case_location: '鸿运物流园3号仓',
-      case_brief: '2025年1月接群众举报，鸿运物流园3号仓有走私电子产品嫌疑。经初步调查，当事人张伟强涉嫌利用物流渠道夹带走私手机、平板电脑等高价值电子产品，涉案金额约500万元。',
-    })
-    const clue2 = await insertClue({
-      clue_number: 'XS-2025-002',
-      clue_name: '跨境洗钱案',
-      lead_unit: '稽查二科',
-      assist_unit: '人民银行反洗钱中心',
-      discovery_date: '2025-02-20',
-      party_name: '李美玲',
-      party_id_number: '440300198512122345',
-      party_phone: '13900002222',
-      party_hometown: '广东深圳',
-      case_location: '深圳湾口岸',
-      case_brief: '2025年2月发现异常资金流动，李美玲通过多个壳公司账户频繁大额转账，涉嫌利用地下钱庄将资金转移境外，累计涉案金额约2000万元。',
-    })
-    const clue3 = await insertClue({
-      clue_number: 'XS-2025-003',
-      clue_name: '假冒商标案',
-      lead_unit: '稽查三科',
-      assist_unit: '市场监管综合执法队',
-      discovery_date: '2025-03-10',
-      party_name: '王大勇',
-      party_id_number: '350000198808083456',
-      party_phone: '13600003333',
-      party_hometown: '福建泉州',
-      case_location: 'XX工业区12栋',
-      case_brief: '2025年3月接品牌方举报，XX工业区12栋存在生产假冒名牌运动鞋窝点。执法人员现场查获假冒"耐克"、"阿迪达斯"商标运动鞋2000余双，制假设备一批，涉案金额约300万元。',
-    })
-
-    const clue1Id = clue1.lastInsertRowid
-    const clue2Id = clue2.lastInsertRowid
-    const clue3Id = clue3.lastInsertRowid
-
-    // Events for clue 1
-    await insertTimelineEvent({ clue_id: clue1Id, event_type: 'case_track', event_time: '2025-01-08 09:30', description: '当事人张伟强从香港经深圳湾口岸入境，随身携带2个大行李箱，行为异常被关注', summary: '当事人入境被关注', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue1Id, event_type: 'case_track', event_time: '2025-01-10 14:00', description: '张伟强在鸿运物流园租下3号仓，以经营"日用品批发"为名义注册个体工商户', summary: '租用仓库注册经营', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue1Id, event_type: 'action_track', event_time: '2025-01-13 10:00', description: '接到群众匿名举报，称鸿运物流园3号仓夜间有异常卸货行为，怀疑涉及走私活动', summary: '接到群众举报', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue1Id, event_type: 'case_track', event_time: '2025-01-14 22:30', description: '3号仓深夜有货车卸货，货物外包装为"日用百货"，但搬运时发出金属碰撞声', summary: '深夜异常卸货', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue1Id, event_type: 'action_track', event_time: '2025-01-15 08:30', description: '稽查一科成立专案组，部署对鸿运物流园进行监控调查', summary: '成立专案组', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue1Id, event_type: 'action_track', event_time: '2025-01-18 15:00', description: '调取3号仓近3个月物流记录，发现发货地址涉及多个电子产品集散地', summary: '调取物流记录', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue1Id, event_type: 'case_track', event_time: '2025-01-20 16:30', description: '张伟强通过物流园发出3件大件包裹，单号显示发往广西凭祥方向', summary: '发出可疑包裹', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue1Id, event_type: 'action_track', event_time: '2025-01-22 09:00', description: '对鸿运物流园3号仓开展突击检查，现场查获未报关iPhone 200台、iPad 100台', summary: '突击检查查获走私品', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue1Id, event_type: 'action_track', event_time: '2025-01-22 11:00', description: '依法对张伟强进行传唤，并在其住所查获交易账本和银行流水', summary: '传唤当事人取证', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue1Id, event_type: 'case_track', event_time: '2025-01-25 10:00', description: '张伟强交代其通过"水客"从香港夹带电子产品入境，再通过物流园掩饰发货的走私链条', summary: '当事人交代走私链条', image_paths: '[]' })
-
-    // Events for clue 2
-    await insertTimelineEvent({ clue_id: clue2Id, event_type: 'case_track', event_time: '2025-02-15 09:00', description: '李美玲在深圳注册"鑫源贸易有限公司"，注册资金100万元，经营范围模糊', summary: '注册壳公司', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue2Id, event_type: 'case_track', event_time: '2025-02-18 14:00', description: '李美玲通过鑫源贸易向香港某公司转账500万元，用途标注为"咨询服务费"', summary: '大额资金转出', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue2Id, event_type: 'action_track', event_time: '2025-02-20 16:00', description: '人民银行反洗钱中心监测到异常交易，向稽查二科推送可疑交易线索', summary: '银行推送可疑线索', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue2Id, event_type: 'action_track', event_time: '2025-02-22 10:30', description: '调取李美玲名下6个关联账户近一年流水，发现频繁大额进出，累计约1800万元', summary: '调取账户流水', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue2Id, event_type: 'case_track', event_time: '2025-02-25 11:00', description: '李美玲再次向境外3个账户转账合计600万元，部分资金流向澳门赌场账户', summary: '再次向境外转账', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue2Id, event_type: 'action_track', event_time: '2025-02-28 08:00', description: '对鑫源贸易公司及李美玲住所进行搜查，查获虚假合同、印章和多套身份证', summary: '搜查公司及住所', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue2Id, event_type: 'action_track', event_time: '2025-03-05 14:00', description: '冻结李美玲关联账户12个，合计冻结资金约800万元', summary: '冻结涉案账户', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue2Id, event_type: 'case_track', event_time: '2025-03-10 15:30', description: '李美玲在深圳湾口岸准备出境时被拦截，随身携带多张境外银行卡', summary: '当事人出境被拦截', image_paths: '[]' })
-
-    // Events for clue 3
-    await insertTimelineEvent({ clue_id: clue3Id, event_type: 'case_track', event_time: '2025-03-05 08:00', description: '王大勇在XX工业区12栋租下一层厂房，对外声称生产"外贸鞋类"', summary: '租用厂房', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue3Id, event_type: 'case_track', event_time: '2025-03-08 20:00', description: '厂房开始夜间生产，机器噪音明显，附近居民投诉但未引起注意', summary: '夜间秘密生产', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue3Id, event_type: 'action_track', event_time: '2025-03-10 10:00', description: '某品牌方委托知识产权代理公司向市场监管部门举报XX工业区假货线索', summary: '品牌方举报', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue3Id, event_type: 'action_track', event_time: '2025-03-12 09:30', description: '稽查三科联合市场监管执法队对XX工业区12栋进行暗访摸底', summary: '暗访摸底', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue3Id, event_type: 'action_track', event_time: '2025-03-15 06:00', description: '凌晨突击检查，现场查获假冒运动鞋2000双、商标模具50套、生产线2条', summary: '突击查获假货窝点', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue3Id, event_type: 'case_track', event_time: '2025-03-15 07:00', description: '王大勇在突击检查中被当场控制，另2名工人被带回协助调查', summary: '控制嫌疑人', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue3Id, event_type: 'action_track', event_time: '2025-03-16 14:00', description: '对查获的2000双假冒鞋进行鉴定，确认侵犯"耐克""阿迪达斯"注册商标权', summary: '鉴定侵权商品', image_paths: '[]' })
-    await insertTimelineEvent({ clue_id: clue3Id, event_type: 'case_track', event_time: '2025-03-20 10:30', description: '王大勇交代制假售假网络，涉及福建、广东多地销售下线', summary: '供出销售网络', image_paths: '[]' })
-
-    // Add tasks for each clue
-    await insertTask({ clue_id: clue1Id, status: 'todo', content: '整理涉案iPhone和iPad的型号清单，联系品牌方确认真伪', urgency: 'high' })
-    await insertTask({ clue_id: clue1Id, status: 'in_progress', content: '对张伟强进行第二次讯问，核实走私渠道细节', urgency: 'urgent' })
-    await insertTask({ clue_id: clue1Id, status: 'done', content: '调取鸿运物流园监控录像', urgency: 'normal' })
-    await insertTask({ clue_id: clue1Id, status: 'todo', content: '追查广西凭祥方向同伙', urgency: 'high' })
-
-    await insertTask({ clue_id: clue2Id, status: 'in_progress', content: '分析李美玲12个关联账户资金流向图', urgency: 'urgent' })
-    await insertTask({ clue_id: clue2Id, status: 'todo', content: '向澳门方面发出协查函，核查赌场账户关联信息', urgency: 'high' })
-    await insertTask({ clue_id: clue2Id, status: 'done', content: '冻结涉案账户', urgency: 'urgent' })
-    await insertTask({ clue_id: clue2Id, status: 'todo', content: '调取鑫源贸易公司工商注册档案', urgency: 'normal' })
-
-    await insertTask({ clue_id: clue3Id, status: 'todo', content: '深挖福建泉州销售下线网络', urgency: 'high' })
-    await insertTask({ clue_id: clue3Id, status: 'in_progress', content: '对2名工人进行询问，核实生产周期和销售渠道', urgency: 'high' })
-    await insertTask({ clue_id: clue3Id, status: 'done', content: '假冒运动鞋鉴定', urgency: 'normal' })
-    await insertTask({ clue_id: clue3Id, status: 'todo', content: '联系"耐克""阿迪达斯"法务部门，沟通民事赔偿事宜', urgency: 'normal' })
-
-    return { success: true, message: '演示数据生成成功！3条线索、26个事件、12个任务。' }
-  } catch (error: any) {
-    return { success: false, message: `生成失败：${error.message}` }
   }
 })
 

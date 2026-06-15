@@ -168,8 +168,9 @@ export const useClueStore = defineStore('clue', () => {
   }
 
   async function addTimelineEvent(eventData: { clue_id: number; event_type: string; event_time: string; description: string; summary: string; image_paths: string }) {
-    await window.electronAPI.insertEvent(eventData)
+    const result = await window.electronAPI.insertEvent(eventData)
     await loadEvents()
+    return result
   }
 
   async function updateTimelineEvent(id: number, data: any) {

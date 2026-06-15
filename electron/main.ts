@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
 import path from 'path'
 import * as fs from 'fs'
 import * as XLSX from 'xlsx'
@@ -95,7 +95,38 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  // Register custom protocol to serve local files (bypasses file:// cross-origin restriction)
+  protocol.handle('local-img', async (request) => {
+    try {
+      // URL format: local-img:///C:/path/to/file.jpg (Windows) or local-img:///home/... (Unix)
+      const raw = request.url.slice('local-img://'.length)
+      let filePath: string
+      if (/^\/[A-Za-z]:/.test(raw)) {
+        filePath = raw.slice(1) // /C:/... → C:/...
+      } else if (/^[A-Za-z]:/.test(raw)) {
+        filePath = raw // C:/... (Chromium may strip leading slashes)
+      } else {
+        filePath = raw // Unix path
+      }
+      filePath = decodeURIComponent(filePath)
+
+      const data = await fs.promises.readFile(filePath)
+      const ext = path.extname(filePath).toLowerCase()
+      const mimeTypes: Record<string, string> = {
+        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+      }
+      return new Response(data, {
+        headers: { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' },
+      })
+    } catch {
+      return new Response('Not found', { status: 404 })
+    }
+  })
+
+  createWindow()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

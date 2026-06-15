@@ -314,11 +314,23 @@ const eventForm = reactive({
   imagePaths: [] as string[],
 })
 
+// ── Convert filesystem path to local-img:// display URL ──
+function toLocalImgUrl(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/')
+  const segments = normalized.split('/')
+  const encoded = segments.map((seg, i) => {
+    if (i === 0 && /^[A-Za-z]:$/.test(seg)) return seg // "C:"
+    return encodeURIComponent(seg)
+  }).join('/')
+  const urlPath = encoded.startsWith('/') ? encoded : '/' + encoded
+  return `local-img://${urlPath}`
+}
+
 async function selectImages() {
   const paths = await window.electronAPI.selectImages()
   if (paths && paths.length > 0) {
     eventForm.imagePaths.push(...paths)
-    eventForm.tempImages.push(...paths.map(p => `file://${p}`))
+    eventForm.tempImages.push(...paths.map(p => toLocalImgUrl(p)))
   }
 }
 
@@ -343,7 +355,7 @@ function handleAddEvent() {
   eventDialogVisible.value = true
 }
 
-function openEditEvent() {
+async function openEditEvent() {
   if (!detailEvent.value) return
   isEditingEvent.value = true
   editingEventId.value = detailEvent.value.id
@@ -351,8 +363,22 @@ function openEditEvent() {
   eventForm.event_time = detailEvent.value.event_time
   eventForm.summary = detailEvent.value.summary || ''
   eventForm.description = detailEvent.value.description || ''
-  eventForm.tempImages = [...detailImages.value]
-  eventForm.imagePaths = []
+
+  // Load existing images — keep imagePaths (real fs paths) and tempImages (display URLs) in 1:1 sync
+  if (detailEvent.value.id) {
+    try {
+      const paths = await window.electronAPI.getEventImages(detailEvent.value.id)
+      eventForm.imagePaths = [...paths]
+      eventForm.tempImages = paths.map((p: string) => toLocalImgUrl(p))
+    } catch {
+      eventForm.imagePaths = []
+      eventForm.tempImages = [...detailImages.value]
+    }
+  } else {
+    eventForm.imagePaths = []
+    eventForm.tempImages = [...detailImages.value]
+  }
+
   eventDialogVisible.value = true
 }
 
@@ -360,15 +386,48 @@ async function handleEventSubmit() {
   if (!store.selectedClueId || !eventForm.summary.trim() || !eventForm.event_time) return
 
   if (isEditingEvent.value && editingEventId.value !== null) {
-    await store.updateTimelineEvent(editingEventId.value, {
+    // ── Edit existing event ──
+    const eventId = editingEventId.value
+    const userDataMarker = `event-images/${eventId}`
+
+    // Existing images: already under userData; new images: selected from elsewhere, need copying
+    const existingPaths = eventForm.imagePaths.filter(p => p.includes(userDataMarker))
+    const newPaths = eventForm.imagePaths.filter(p => !p.includes(userDataMarker))
+
+    let savedPaths: string[] = []
+    if (newPaths.length > 0) {
+      savedPaths = await window.electronAPI.copyImagesForEvent(eventId, newPaths)
+    }
+
+    await store.updateTimelineEvent(eventId, {
       event_type: eventForm.event_type,
       event_time: eventForm.event_time,
       description: eventForm.description,
       summary: eventForm.summary.trim(),
+      image_paths: JSON.stringify([...existingPaths, ...savedPaths]),
     })
     ElMessage.success('事件更新成功')
+
+    // Refresh detail popup if it's still open (so new images show immediately)
+    if (detailVisible.value && detailEvent.value?.id === eventId) {
+      detailEvent.value = {
+        ...detailEvent.value,
+        event_type: eventForm.event_type as 'case_track' | 'action_track',
+        event_time: eventForm.event_time,
+        description: eventForm.description,
+        summary: eventForm.summary.trim(),
+      }
+      try {
+        const images = await window.electronAPI.getEventImages(eventId)
+        detailImages.value = images.map((p: string) => toLocalImgUrl(p))
+      } catch {
+        const allPaths = [...existingPaths, ...savedPaths]
+        detailImages.value = allPaths.map((p: string) => toLocalImgUrl(p))
+      }
+    }
   } else {
-    await store.addTimelineEvent({
+    // ── Create new event ──
+    const result = await store.addTimelineEvent({
       clue_id: store.selectedClueId!,
       event_type: eventForm.event_type,
       event_time: eventForm.event_time,
@@ -376,6 +435,16 @@ async function handleEventSubmit() {
       summary: eventForm.summary.trim(),
       image_paths: '[]',
     })
+
+    if (result && result.lastInsertRowid && eventForm.imagePaths.length > 0) {
+      const newId = result.lastInsertRowid
+      const savedPaths = await window.electronAPI.copyImagesForEvent(newId, eventForm.imagePaths)
+      if (savedPaths.length > 0) {
+        await window.electronAPI.updateEvent(newId, { image_paths: JSON.stringify(savedPaths) })
+        await store.loadEvents()
+      }
+    }
+
     ElMessage.success('事件添加成功')
   }
 
@@ -407,11 +476,11 @@ async function openDetail(event: TimelineEvent) {
   if (event.id) {
     try {
       const images = await window.electronAPI.getEventImages(event.id)
-      detailImages.value = images.map(p => `file://${p}`)
+      detailImages.value = images.map(p => toLocalImgUrl(p))
     } catch {
       try {
         const paths = JSON.parse(event.image_paths || '[]')
-        detailImages.value = paths.map((p: string) => `file://${p}`)
+        detailImages.value = paths.map((p: string) => toLocalImgUrl(p))
       } catch {
         detailImages.value = []
       }
